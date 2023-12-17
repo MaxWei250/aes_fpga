@@ -11,7 +11,8 @@ module aes_key_expasion
     
     input  wire        [   3:0]         round                      ,//*indicate the current round
     output wire        [ 127:0]         round_key                  ,//*output the round key
-    output wire                         key_ready                   
+    output wire                         key_ready                  ,
+    output wire        [   3:0]         round_num                   
 
 );
 // region:************parameter************
@@ -84,11 +85,12 @@ assign AES_MODE = keylen;
 //+++++++++++out assign+++++++++++
 assign key_ready = tem_ready;
 assign round_key = key_ready ? key_mem[round] : 0;
+assign round_num = tem_mode_round;
 // endregion:assign
 
 // region:************always************
 //*****************key_expasion*****************
-always @(*) begin : round_mode
+always_comb begin : round_mode
     case (AES_MODE)
         AES_128_KEY: begin
             tem_mode_round = AES_128_N_ROUND;
@@ -118,7 +120,6 @@ always @(posedge clk) begin:key_set
             key_mem[cnt_round-1] <= key_mem_new;
     end
 end
-
 // endregion:always
 
 // region:************state machine************
@@ -139,7 +140,7 @@ always_comb begin:second_state
                 next_state = INIT_KEY;
             end
             else begin
-                next_state = next_state;
+                next_state = IDLE;
             end
         end
         INIT_KEY:begin
@@ -149,7 +150,7 @@ always_comb begin:second_state
                         next_state = ROUND_KEY;
                     end
                     else begin
-                        next_state = next_state;
+                        next_state = INIT_KEY;
                     end
                 end
                 AES_192_KEY:begin
@@ -157,7 +158,7 @@ always_comb begin:second_state
                         next_state = ROUND_KEY;
                     end
                     else begin
-                        next_state = next_state;
+                        next_state = INIT_KEY;
                     end
                 end
                 AES_256_KEY:begin
@@ -165,11 +166,12 @@ always_comb begin:second_state
                         next_state = ROUND_KEY;
                     end
                     else begin
-                        next_state = next_state;
+                        next_state = INIT_KEY;
                     end
                 end
-                default:
-                    next_state = next_state;
+                default: begin
+                    next_state = INIT_KEY;
+                end
             endcase
         end
         ROUND_KEY:begin
@@ -177,11 +179,15 @@ always_comb begin:second_state
                 next_state = DONE;
             end
             else begin
-                next_state = next_state;
+                next_state = ROUND_KEY;
             end
         end
-        DONE: next_state = IDLE;
-        default: next_state = IDLE;
+        DONE: begin 
+            next_state = IDLE; 
+        end
+        default: begin 
+            next_state = IDLE;
+        end
     endcase
 end
 //3.
@@ -213,11 +219,14 @@ always @(posedge clk) begin:third_state
                 cnt_round6_8  <= 0;
                 cnt_word      <= 0;
                 cnt_remain0   <= 0;
-                key_mem_new   <= 0;
+                key_mem_new   <= 0; 
+                key_done_flag <= 0;
                 tem_key0      <= key_in[255:128];
                 tem_key1      <= key_in[127:0];
-                key_done_flag <= 1'b0;
+                wr_sbox_flag  <= 1'b0;
+                tem_sbox_wr   <=32'd0;
                 key_new_we    <= 1'b0;
+                tem_ready     <= 1'b0;//*在down模式拉高
                 for(integer i = 0;i < 8;i++) begin
                     w[i] <= 32'd0;
                 end
@@ -267,7 +276,6 @@ always @(posedge clk) begin:third_state
                         AES_128_KEY:begin
                             if (cnt_word == 0) begin//*开始是第四个字
                                 cnt_word     <= 2'd1;
-                                cnt_round    <= cnt_round;
                                 wr_sbox_flag <= 1'b1;
                                 tem_sbox_wr  <= {w[3][23:0],w[3][31:24]};
                                 key_new_we   <= 1'b1;
@@ -275,32 +283,23 @@ always @(posedge clk) begin:third_state
                                 key_done_flag<= key_new_we ? 1'b1 : 1'b0;
                             end
                             else if(wr_sbox_flag) begin
-                                cnt_word      <= cnt_word;
-                                cnt_round     <= cnt_round;
                                 w[4] <= w[0]^sbox_rd^rcon_table[cnt_round-1];
                                 wr_sbox_flag  <= 1'b0;
-                                key_mem_new   <= 128'd0;
                                 key_done_flag <= 1'b0;
                             end
                             else if(cnt_word == (AES_128_N_KEY-1)) begin
                                 cnt_word      <= 2'd0;
                                 cnt_round     <= cnt_round + 1;
-                                w[cnt_word+4] <= w[cnt_word+0-2]^w[cnt_word+3];
-                                {w[0],w[1],w[2],w[3]} <= {w[4],w[5],w[6],w[cnt_word+0-2]^w[cnt_word+3]};
-                                key_done_flag <= 1'b0;
-                                key_mem_new   <= 128'd0;
+                                w[cnt_word+4] <= w[cnt_word]^w[cnt_word+3];
+                                {w[0],w[1],w[2],w[3]} <= {w[4],w[5],w[6],w[cnt_word+0]^w[cnt_word+3]};
                             end
                             else begin
                                 w[cnt_word+4] <= w[cnt_word+0]^w[cnt_word+3];
                                 cnt_word      <= cnt_word + 1   ;
-                                cnt_round     <= cnt_round      ;
-                                key_done_flag <= 1'b0       ;
-                                key_mem_new   <= 128'd0       ;
                             end
                         end 
                         AES_192_KEY:begin
                             if ((cnt_remain0 == AES_192_N_KEY - 1) || (cnt_word == 0)) begin:remian6_0
-                                cnt_round     <= cnt_round;
                                 cnt_word      <= cnt_word + 1;
                                 w[4] <= (cnt_remain0 != (AES_192_N_KEY - 1)) ? w[3]^temp_w[2] : w[4];//*因为cnt word为0的情况已经被截胡了，所以这里要判断w4的值
                                 cnt_round6_8  <= (cnt_remain0 == AES_192_N_KEY - 1) ? cnt_round6_8 + 1'b1 : cnt_round6_8;
@@ -313,10 +312,6 @@ always @(posedge clk) begin:third_state
                             else if(wr_sbox_flag) begin
                                 w[6] <= (cnt_word == 3) ? w[0] ^ sbox_rd ^ rcon_table[cnt_round6_8 - 1] : w[6];
                                 w[4] <= (cnt_word == 1) ? temp_w[2] ^ sbox_rd ^ rcon_table[cnt_round6_8 - 1] : w[4];
-                                cnt_remain0   <= cnt_remain0 ;
-                                cnt_round6_8  <= cnt_round6_8  ;
-                                cnt_word      <= cnt_word    ;
-                                cnt_round     <= cnt_round   ;
                                 wr_sbox_flag  <= 1'b0        ;
                                 key_done_flag <= 1'b0        ;
                             end
@@ -324,25 +319,22 @@ always @(posedge clk) begin:third_state
                                 cnt_word      <= 2'd0;
                                 cnt_round     <= cnt_round + 1;
                                 cnt_remain0   <= cnt_remain0 + 1;
-                                w[cnt_word+4] <= w[cnt_word+0-2]^w[cnt_word+3];
-                                {w[0],w[1],w[2],w[3]} <= {w[4],w[5],w[6],w[cnt_word+0-2]^w[cnt_word+3]};
+                                w[7] <= w[1]^w[6];
+                                {w[0],w[1],w[2],w[3]} <= {w[4],w[5],w[6],w[1]^w[6]};
                                 {temp_w[0],temp_w[1],temp_w[2],temp_w[3]} <= {w[0],w[1],w[2],w[3]};
                                 key_done_flag <= 1'b0;
-                                key_mem_new   <= 128'd0;
                             end
                             else begin
                                 w[cnt_word+4] <= (cnt_word >= 2) ? w[cnt_word-2]^w[cnt_word+3] : w[cnt_word+3]^temp_w[cnt_word+2];
                                 cnt_word      <= cnt_word + 1'b1;
-                                cnt_round     <= cnt_round;
                                 cnt_remain0   <= cnt_remain0 + 1'b1;
                                 key_done_flag <= 1'b0;
-                                key_mem_new   <= 128'd0;
                             end
                         end
                         AES_256_KEY:begin
                             if ((cnt_word == 0)) begin:remian8_0
                                 cnt_round     <= (cnt_round == 1) ? 4'd2 : cnt_round;
-                                cnt_word      <= cnt_word + 1;
+                                cnt_word      <=  1;
                                 cnt_round6_8  <= (cnt_remain0 == 3) ? cnt_round6_8 : cnt_round6_8 + 1'b1;
                                 cnt_remain0   <= cnt_remain0+ 1'b1;
                                 key_done_flag <= 1'b1;
@@ -352,10 +344,6 @@ always @(posedge clk) begin:third_state
                             end
                             else if(wr_sbox_flag) begin
                                 w[4] <=  (cnt_remain0 == 4) ? (temp_w[0]^sbox_rd) : (temp_w[0] ^ sbox_rd ^ rcon_table[cnt_round6_8 - 1]);
-                                cnt_remain0   <= cnt_remain0 ;
-                                cnt_round6_8  <= cnt_round6_8;
-                                cnt_word      <= cnt_word    ;
-                                cnt_round     <= cnt_round   ;
                                 wr_sbox_flag  <= 1'b0        ;
                                 key_done_flag <= 1'b0        ;
                             end
@@ -363,53 +351,59 @@ always @(posedge clk) begin:third_state
                                 cnt_word      <= 2'd0;
                                 cnt_round     <= cnt_round + 1;
                                 cnt_remain0   <= cnt_remain0 + 1;
-                                w[cnt_word+4] <= temp_w[cnt_word]^w[cnt_word+3];
-                                {w[0],w[1],w[2],w[3]} <= {w[4],w[5],w[6],temp_w[cnt_word]^w[cnt_word+3]};
+                                w[7] <= temp_w[3]^w[6];
+                                {w[0],w[1],w[2],w[3]} <= {w[4],w[5],w[6],temp_w[3]^w[6]};
                                 {temp_w[0],temp_w[1],temp_w[2],temp_w[3]} <= {w[0],w[1],w[2],w[3]};
-                                key_done_flag <= 1'b0;
-                                key_mem_new   <= 128'd0;
                             end
                             else begin
                                 w[cnt_word+4] <= w[cnt_word+3]^temp_w[cnt_word];
                                 cnt_word      <= cnt_word + 1'b1;
-                                cnt_round     <= cnt_round;
                                 cnt_remain0   <= cnt_remain0 + 1'b1;
-                                key_done_flag <= 1'b0;
-                                key_mem_new   <= 128'd0;
                             end
                         end
                         default:begin
-                            cnt_round    <= 4'b0;
-                            cnt_word     <= 2'd0;
-                            key_mem_new  <= 128'd0;
-                            key_done_flag<= 1'b0;
-                            wr_sbox_flag <= 1'b0;
-                            tem_sbox_wr  <=32'd0;
+                            cnt_round     <= 0;
+                            cnt_round6_8  <= 0;
+                            cnt_word      <= 0;
+                            cnt_remain0   <= 0;
+                            key_mem_new   <= 0; 
+                            key_done_flag <= 0;
+                            tem_key0      <= key_in[255:128];
+                            tem_key1      <= key_in[127:0];
+                            wr_sbox_flag  <= 1'b0;
+                            tem_sbox_wr   <=32'd0;
+                            key_new_we    <= 1'b0;
+                            tem_ready     <= 1'b0;//*在down模式拉高
+                            for(integer i = 0;i < 8;i++) begin
+                                w[i] <= 32'd0;
+                            end
+                            for(integer i = 0;i < 4;i++) begin
+                                temp_w[i] <= 32'd0;
+                            end
                         end
                     endcase
                 end
             DONE:begin
-                cnt_round    <= 4'b0;
-                cnt_word     <= 2'd0;
-                key_mem_new  <= 128'd0;
-                key_done_flag<= 1'b0;
-                wr_sbox_flag <= 1'b0;
-                tem_sbox_wr  <=32'd0;
-                key_new_we   <= 1'b0;
                 tem_ready    <= 1'b1;
             end
             default: begin
-                cnt_round   <= 0;
-                cnt_word    <= 0;
-                key_mem_new <= 0; 
-                tem_key0    <= 128'd0;
-                tem_key1    <= 128'd0;
-                wr_sbox_flag<= 1'b0;
-                tem_sbox_wr <=32'd0;
-                key_new_we  <= 1'b0;
-                tem_ready   <= 1'b0;//*在down模式拉高
+                cnt_round     <= 0;
+                cnt_round6_8  <= 0;
+                cnt_word      <= 0;
+                cnt_remain0   <= 0;
+                key_mem_new   <= 0; 
+                key_done_flag <= 0;
+                tem_key0      <= key_in[255:128];
+                tem_key1      <= key_in[127:0];
+                wr_sbox_flag  <= 1'b0;
+                tem_sbox_wr   <=32'd0;
+                key_new_we    <= 1'b0;
+                tem_ready     <= 1'b0;//*在down模式拉高
                 for(integer i = 0;i < 8;i++) begin
                     w[i] <= 32'd0;
+                end
+                for(integer i = 0;i < 4;i++) begin
+                    temp_w[i] <= 32'd0;
                 end
             end
         endcase
