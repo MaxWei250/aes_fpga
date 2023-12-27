@@ -233,9 +233,10 @@ always @(posedge clk) begin:third_state
                 for(integer i = 0;i < 4;i++) begin
                     temp_w[i] <= 32'd0;
                 end
-                tem_ready <= init ? 1'b0 : tem_ready;
+                tem_ready <= tem_ready;
             end
             INIT_KEY:begin
+                tem_ready <= 1'B0;                                       
                 case (AES_MODE)
                     AES_128_KEY: begin
                         key_mem_new   <= tem_key0;
